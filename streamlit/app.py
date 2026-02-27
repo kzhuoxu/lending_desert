@@ -6,14 +6,6 @@ from google.oauth2 import service_account
 
 st.set_page_config(page_title="Lending Desert Discovery", layout="wide")
 
-MSA_LABELS = {
-    14460: "Boston",
-    12060: "Atlanta",
-    13820: "Birmingham, AL",
-    31080: "Los Angeles",
-    40900: "Sacramento",
-}
-
 
 @st.cache_resource
 def get_bq_client():
@@ -21,6 +13,28 @@ def get_bq_client():
         st.secrets["gcp_service_account"]
     )
     return bigquery.Client(credentials=credentials, project=credentials.project_id)
+
+
+@st.cache_data(ttl=3600)
+def load_msa_labels():
+    """Returns (md_to_metro, metro_names, metro_to_mds).
+
+    md_to_metro: {msa_md int → short_name str}
+    metro_names: sorted list of unique metro display names
+    metro_to_mds: {short_name → [msa_md, ...]}  (Boston/LA have 2 MD codes each)
+    """
+    client = get_bq_client()
+    query = """
+    SELECT msa_md, short_name
+    FROM `{project}.lending_desert.msa_lookup`
+    GROUP BY msa_md, short_name
+    ORDER BY short_name
+    """.format(project=client.project)
+    df = client.query(query).to_dataframe()
+    md_to_metro = dict(zip(df["msa_md"], df["short_name"]))
+    metro_names = sorted(df["short_name"].unique())
+    metro_to_mds = df.groupby("short_name")["msa_md"].apply(list).to_dict()
+    return md_to_metro, metro_names, metro_to_mds
 
 
 @st.cache_data(ttl=3600)
@@ -32,6 +46,19 @@ def load_data():
     return client.query(query).to_dataframe()
 
 
+@st.cache_data(ttl=86400)
+def load_tract_centroids():
+    """Load Census TIGER/Line 2022 gazetteer for census tract lat/lon centroids."""
+    import os
+
+    path = os.path.join(os.path.dirname(__file__), "2022_Gaz_tracts_national.txt")
+    gaz = pd.read_csv(path, sep="\t", dtype={"GEOID": str})
+    # Census gazetteer pads the final column header with trailing whitespace.
+    gaz.columns = gaz.columns.str.strip()
+    gaz = gaz[["GEOID", "INTPTLAT", "INTPTLONG"]]
+    return gaz.rename(columns={"GEOID": "census_tract", "INTPTLAT": "lat", "INTPTLONG": "lon"})
+
+
 def main():
     st.title("Lending Desert Discovery Engine")
     st.markdown(
@@ -39,17 +66,19 @@ def main():
         "due to appraisal bias — where a new lender can have the most impact."
     )
 
+    md_to_metro, metro_names, metro_to_mds = load_msa_labels()
     df = load_data()
-    df["msa_label"] = df["msa_md"].map(MSA_LABELS)
+    df["msa_label"] = df["msa_md"].map(md_to_metro)
 
     # --- Filters ---
     selected_msa = st.selectbox(
         "Select Metro Area",
-        options=list(MSA_LABELS.values()),
+        options=metro_names,
         index=0,
     )
-    msa_code = [k for k, v in MSA_LABELS.items() if v == selected_msa][0]
-    filtered = df[df["msa_md"] == msa_code]
+    # Boston and LA each have 2 MD codes — use isin() to capture both divisions
+    msa_mds = metro_to_mds[selected_msa]
+    filtered = df[df["msa_md"].isin(msa_mds)]
 
     col1, col2, col3 = st.columns(3)
     col1.metric("Census Tracts", len(filtered))
@@ -63,8 +92,36 @@ def main():
         "appraisal bias — prime targets for a new loan product."
     )
 
-    # NOTE: Map requires lat/lon tract centroids — join with Census TIGER/Line gazetteer:
-    #   https://www2.census.gov/geo/docs/maps-data/data/gazetteer/2022_Gazetteer/2022_Gaz_tracts_national.txt
+    centroids = load_tract_centroids()
+    map_df = filtered.merge(centroids, on="census_tract", how="left").dropna(subset=["lat", "lon"])
+    # Plotly cannot handle pandas nullable Int64; cast to float for the size encoding.
+    map_df["total_applications"] = map_df["total_applications"].astype(float)
+
+    if not map_df.empty:
+        fig_map = px.scatter_mapbox(
+            map_df,
+            lat="lat",
+            lon="lon",
+            color="opportunity_score",
+            size="total_applications",
+            size_max=20,
+            hover_name="tract_name",
+            hover_data={
+                "census_tract": True,
+                "denial_rate": ":.1%",
+                "minority_pct": ":.1%",
+                "opportunity_score": True,
+                "lat": False,
+                "lon": False,
+            },
+            color_continuous_scale="Reds",
+            zoom=8,
+            mapbox_style="carto-positron",
+            title=f"Opportunity Score by Tract — {selected_msa}",
+        )
+        fig_map.update_layout(margin={"r": 0, "t": 40, "l": 0, "b": 0}, height=500)
+        st.plotly_chart(fig_map, use_container_width=True)
+
     st.dataframe(
         filtered.nlargest(50, "opportunity_score")[
             ["census_tract", "tract_name", "opportunity_score", "denial_rate",
@@ -81,7 +138,6 @@ def main():
         "'Collateral' denials driven by appraisal bias are the key signal."
     )
 
-    # Split tracts into minority-majority (>50%) vs white-majority
     minority_tracts = filtered[filtered["minority_pct"] > 0.5]
     white_tracts = filtered[filtered["minority_pct"] <= 0.5]
 
@@ -102,7 +158,6 @@ def main():
         white_tracts["insufficient_cash_denials"].sum(),
     ]
 
-    # Normalize to percentages
     minority_total = sum(minority_counts) or 1
     white_total = sum(white_counts) or 1
 

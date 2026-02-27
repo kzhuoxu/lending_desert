@@ -4,7 +4,7 @@
   OPTIONS()
   as -- Filter HMDA to target MSAs, select columns relevant to lending desert analysis
 WITH target_msas AS (
-    SELECT * FROM UNNEST([14460, 12060, 13820, 31080, 40900]) AS msa_md
+    SELECT DISTINCT msa_md FROM `fit-reference-447221-v2`.`lending_desert`.`msa_lookup`
 )
 
 SELECT

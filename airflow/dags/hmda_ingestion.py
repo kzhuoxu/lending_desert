@@ -1,7 +1,11 @@
 """
 HMDA Data Ingestion DAG
-Downloads HMDA LAR data from CFPB Data Browser API (filtered by MSA),
+Downloads HMDA LAR data from CFPB Data Browser API (one MSA at a time),
 converts to Parquet, uploads to GCS, loads into BigQuery via external table.
+
+Downloading per-MSA rather than all MSAs in one request because the CFPB
+Data Browser API silently truncates large responses — LA and Boston each
+exceed ~100k rows and were missing from the combined-MSA download.
 
 Using Parquet instead of CSV because:
 - Parquet is self-describing (schema embedded in file), so BigQuery needs no
@@ -24,8 +28,12 @@ GCP_DATASET = os.environ.get("GCP_DATASET", "lending_desert")
 GCP_LOCATION = os.environ.get("GCP_LOCATION", "US")
 
 HMDA_YEARS = [2022, 2023]
-# Target MSAs: Boston, Atlanta, Birmingham AL, LA, Sacramento
-TARGET_MSAS = "14460,12060,13820,31080,40900"
+# Must mirror msa_lookup seed — one code per target MSA
+# Metropolitan Division (MD) codes from FFIEC HMDA data.
+# Boston (14460 parent) → MDs 14454 (MA counties) + 40484 (NH counties)
+# LA (31080 parent) → MDs 31084 (LA-Long Beach-Glendale) + 11244 (Anaheim-Santa Ana-Irvine)
+# Atlanta, Birmingham, Sacramento have no MD split — use MSA code directly.
+TARGET_MSA_CODES = [14454, 40484, 12060, 13820, 31084, 11244, 40900]
 
 default_args = {
     "owner": "airflow",
@@ -37,16 +45,16 @@ default_args = {
 
 def create_hmda_dag(year):
     dag_id = f"hmda_ingestion_{year}"
-    csv_name = f"hmda_{year}.csv"
     parquet_name = f"hmda_{year}.parquet"
-    local_csv = f"/tmp/{csv_name}"
     local_parquet = f"/tmp/{parquet_name}"
     gcs_path = f"hmda/{parquet_name}"
-    # Data Browser API requires: years + geography + at least one HMDA filter
-    download_url = (
-        f"https://ffiec.cfpb.gov/v2/data-browser-api/view/csv"
-        f"?years={year}&msamds={TARGET_MSAS}&actions_taken=1,3&loan_purposes=1"
-    )
+
+    # Per-MSA CSV paths resolved at DAG-creation time so the bash and Python
+    # subprocesses receive plain strings with no runtime variable lookups.
+    msa_csv_paths = [f"/tmp/hmda_{year}_{msa}.csv" for msa in TARGET_MSA_CODES]
+    msa_csv_paths_repr = repr(msa_csv_paths)
+    all_tmp_files = " ".join(msa_csv_paths)
+    msa_codes_str = " ".join(str(m) for m in TARGET_MSA_CODES)
 
     dag = DAG(
         dag_id=dag_id,
@@ -59,28 +67,44 @@ def create_hmda_dag(year):
     )
 
     with dag:
+        # Download each MSA individually to avoid CFPB API row-count truncation.
+        # Validate the CSV header after each download so a silent API error page
+        # (which would still exit 0 from curl) is caught immediately.
         download = BashOperator(
             task_id="download_hmda",
-            bash_command=f'curl -sSL --retry 3 --retry-delay 10 -o {local_csv} "{download_url}" && head -1 {local_csv} | grep -q "activity_year" && ls -lh {local_csv}',
-            execution_timeout=timedelta(minutes=30),
+            bash_command=f"""
+set -e
+for msa in {msa_codes_str}; do
+    echo "Downloading MSA $msa for {year}..."
+    curl -sSL --retry 3 --retry-delay 10 \\
+        -o /tmp/hmda_{year}_$msa.csv \\
+        "https://ffiec.cfpb.gov/v2/data-browser-api/view/csv?years={year}&msamds=$msa&actions_taken=1,3&loan_purposes=1"
+    head -1 /tmp/hmda_{year}_$msa.csv | grep -q "activity_year" || (echo "ERROR: bad response for MSA $msa" && exit 1)
+    echo "MSA $msa: $(wc -l < /tmp/hmda_{year}_$msa.csv) rows"
+done
+""",
+            execution_timeout=timedelta(minutes=60),
         )
 
-        # Convert CSV to Parquet so BigQuery can infer a correct nullable schema
-        # without autodetect guessing wrong types on empty-string null values.
-        # na_values=['NA', ''] treats both the HMDA null marker and empty fields
-        # as pandas NaN, which Parquet stores as proper nulls.
+        # Read each per-MSA CSV, concatenate, replace HMDA null markers, write Parquet.
+        # dtype=str avoids mixed-type inference (e.g. loan_to_value_ratio has both
+        # numeric strings and 'Exempt'). Casting is handled in dbt staging models.
+        # Explicit pyarrow string schema ensures columns that are entirely null in one
+        # year (e.g. applicant_ethnicity_5) aren't serialised as Arrow null/INT64,
+        # which would conflict with the STRING schema established by the first year's
+        # CREATE OR REPLACE TABLE when the second year runs INSERT INTO.
         convert_to_parquet = BashOperator(
             task_id="convert_to_parquet",
             bash_command=f"""python3 -c "
 import pandas as pd
-# dtype=str avoids mixed-type inference issues (e.g. loan_to_value_ratio
-# has both numeric values and 'Exempt' for exempt lenders).
-# replace() converts HMDA null markers and empty strings to None (Parquet null).
-# Type casting is handled downstream in dbt staging models.
-df = pd.read_csv('{local_csv}', dtype=str, keep_default_na=False)
-df = df.replace({{'NA': None, '': None}})
-df.to_parquet('{local_parquet}', index=False)
-print(f'Converted {{len(df)}} rows, {{len(df.columns)}} columns to Parquet')
+import pyarrow as pa
+import pyarrow.parquet as pq
+files = {msa_csv_paths_repr}
+dfs = [pd.read_csv(f, dtype=str, keep_default_na=False) for f in files]
+combined = pd.concat(dfs, ignore_index=True).replace({{'NA': None, '': None}})
+schema = pa.schema([(col, pa.string()) for col in combined.columns])
+pq.write_table(pa.Table.from_pandas(combined, schema=schema), '{local_parquet}')
+print(f'Combined {{len(combined)}} rows from {{len(dfs)}} MSA files: {{[len(d) for d in dfs]}}')
 "
 """,
         )
@@ -93,7 +117,7 @@ print(f'Converted {{len(df)}} rows, {{len(df.columns)}} columns to Parquet')
         )
 
         # Parquet is self-describing — BigQuery reads the embedded schema directly,
-        # no need to define column types manually (same pattern as the taxi dataset).
+        # no need to define column types manually.
         create_ext_table = BigQueryInsertJobOperator(
             task_id="create_external_table",
             configuration={
@@ -144,7 +168,7 @@ print(f'Converted {{len(df)}} rows, {{len(df.columns)}} columns to Parquet')
 
         cleanup = BashOperator(
             task_id="cleanup",
-            bash_command=f"rm -f {local_csv} {local_parquet}",
+            bash_command=f"rm -f {local_parquet} {all_tmp_files}",
         )
 
         download >> convert_to_parquet >> upload_gcs >> create_ext_table >> load_bq >> drop_ext_table >> cleanup

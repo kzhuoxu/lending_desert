@@ -5,6 +5,15 @@ config-version: 2
 profile: lending_desert
 
 model-paths: ["models"]
+seed-paths: ["seeds"]
+test-paths: ["tests"]
+
+seeds:
+  lending_desert:
+    msa_lookup:
+      +column_types:
+        msa_md: INT64
+        state_fips: STRING
 
 models:
   lending_desert:

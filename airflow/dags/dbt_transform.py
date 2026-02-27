@@ -27,7 +27,14 @@ dag = DAG(
 DBT_DIR = "/opt/airflow/dbt"
 
 with dag:
+    dbt_seed = BashOperator(
+        task_id="dbt_seed",
+        bash_command=f"dbt seed --project-dir {DBT_DIR} --profiles-dir {DBT_DIR}",
+    )
+
     dbt_run = BashOperator(
         task_id="dbt_run",
         bash_command=f"dbt run --project-dir {DBT_DIR} --profiles-dir {DBT_DIR}",
     )
+
+    dbt_seed >> dbt_run

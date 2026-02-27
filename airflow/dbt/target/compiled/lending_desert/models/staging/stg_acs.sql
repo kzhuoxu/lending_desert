@@ -1,6 +1,6 @@
 -- Clean ACS tract data and compute minority percentage
 SELECT
-    CAST(census_tract AS STRING) AS census_tract,
+    LPAD(CAST(census_tract AS STRING), 11, '0') AS census_tract,
     state_abbr,
     NAME AS tract_name,
     CAST(B01003_001E AS INT64) AS total_population,
