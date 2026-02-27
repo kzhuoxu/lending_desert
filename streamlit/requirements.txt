@@ -3,3 +3,5 @@ google-cloud-bigquery==3.14.1
 plotly==5.18.0
 pandas==2.2.3
 db-dtypes==1.2.0
+gcsfs
+st-files-connection
