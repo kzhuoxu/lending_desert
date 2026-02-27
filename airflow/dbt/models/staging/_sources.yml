@@ -1,0 +1,9 @@
+version: 2
+
+sources:
+  - name: raw
+    database: "{{ env_var('GCP_PROJECT_ID') }}"
+    schema: lending_desert
+    tables:
+      - name: hmda_lar_raw
+      - name: acs_tract_raw

@@ -1,0 +1,14 @@
+name: lending_desert
+version: "1.0.0"
+config-version: 2
+
+profile: lending_desert
+
+model-paths: ["models"]
+
+models:
+  lending_desert:
+    staging:
+      +materialized: view
+    marts:
+      +materialized: table

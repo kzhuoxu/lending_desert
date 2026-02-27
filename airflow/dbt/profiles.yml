@@ -1,0 +1,11 @@
+lending_desert:
+  target: dev
+  outputs:
+    dev:
+      type: bigquery
+      method: service-account
+      project: "{{ env_var('GCP_PROJECT_ID') }}"
+      dataset: lending_desert
+      location: US
+      keyfile: /opt/airflow/config/service-account.json
+      threads: 4

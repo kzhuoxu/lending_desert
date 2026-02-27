@@ -1,0 +1,3 @@
+models:
+  - name: stg_hmda
+    description: "Staged HMDA loan application records filtered to target MSAs and home purchase loans, with race grouping and collateral denial flags."
