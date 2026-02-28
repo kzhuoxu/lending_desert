@@ -25,11 +25,18 @@ Census API (ACS)      ──→  GCS  ──→  BigQuery (raw)  ──↗
 ### 1. GCP Infrastructure
 
 ```bash
+source .env
 cd setup
+export TF_VAR_credentials=$GCP_CREDENTIALS_PATH
+export TF_VAR_project=$GCP_PROJECT_ID
+export TF_VAR_region=$GCP_REGION
+export TF_VAR_location=$GCP_LOCATION
+export TF_VAR_bq_dataset_name=$GCP_DATASET
+export TF_VAR_gcs_bucket_name=$GCP_BUCKET_NAME
 terraform init && terraform apply
 ```
 
-Creates: GCS bucket + BigQuery dataset (`lending_desert`).
+Creates: GCS bucket + BigQuery dataset.
 
 ### 2. Census API Key
 

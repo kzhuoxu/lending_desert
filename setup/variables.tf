@@ -1,6 +1,6 @@
 variable "credentials" {
   description = "My Credentials"
-  default     = "/Users/zhuoqi/keys/my-creds.json"
+  default     = "default-value"
   #ex: if you have a directory where this file is called keys with your service account json file
   #saved there as my-creds.json you could use default = "./keys/my-creds.json"
 }
@@ -8,31 +8,31 @@ variable "credentials" {
 
 variable "project" {
   description = "Project"
-  default     = "fit-reference-447221-v2"
+  default     = "default-value"
 }
 
 variable "region" {
   description = "Region"
   #Update the below to your desired region
-  default     = "us-central1"
+  default     = "default-value"
 }
 
 variable "location" {
   description = "Project Location"
   #Update the below to your desired location
-  default     = "US"
+  default     = "default-value"
 }
 
 variable "bq_dataset_name" {
   description = "My BigQuery Dataset Name"
   #Update the below to what you want your dataset to be called
-  default     = "lending_desert"
+  default     = "default-value"
 }
 
 variable "gcs_bucket_name" {
   description = "My Storage Bucket Name"
   #Update the below to a unique bucket name
-  default     = "fit-reference-447221-v2-lending-desert"
+  default     = "default-value"
 }
 
 variable "gcs_storage_class" {

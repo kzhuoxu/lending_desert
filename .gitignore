@@ -9,6 +9,21 @@ wheels/
 # Virtual environments
 .venv
 .env
+!airflow/.env
 
+# GCP credentials
 service-account.json
+airflow/config/service-account.json
+airflow/*.json
+
+# Airflow runtime files
+airflow/logs/
+airflow/airflow.db
+airflow/airflow.cfg
+airflow/webserver_config.py
+
+# OS files
+.DS_Store
+Thumbs.db
+
 **/*.toml
