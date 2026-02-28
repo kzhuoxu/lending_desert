@@ -12,18 +12,16 @@ wheels/
 !airflow/.env
 
 # GCP credentials
-service-account.json
-airflow/config/service-account.json
-airflow/*.json
+**/*.toml
 
 # Airflow runtime files
 airflow/logs/
 airflow/airflow.db
 airflow/airflow.cfg
 airflow/webserver_config.py
+airflow/dbt/logs
+airflow/**/*.json
 
 # OS files
 .DS_Store
 Thumbs.db
-
-**/*.toml
