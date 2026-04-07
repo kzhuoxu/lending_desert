@@ -93,6 +93,8 @@ streamlit run app.py
 
 **Streamlit Cloud:** connect repo, set `streamlit/app.py` as entrypoint, add your GCP service account JSON as a secret under key `gcp_service_account`.
 
+**Deployed Streamlit Site:** https://lendingdesert.streamlit.app/ See Dashboard on this site!
+
 ## dbt Models
 
 | Model | Type | Description |
